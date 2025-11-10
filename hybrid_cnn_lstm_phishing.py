@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader, TensorDataset
 CSV_PATH = "URL dataset.csv"   # change if your file name differs
 MAX_LEN = 100                  # sequence length (characters)
 BATCH_SIZE = 64
-EPOCHS = 5
+EPOCHS = 10
 LEARNING_RATE = 0.001
 MODEL_PATH = "hybrid_cnn_lstm_model.pth"
 CHAR2IDX_PATH = "char2idx.json"

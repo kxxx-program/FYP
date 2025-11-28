@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "AI Phishing Link Detector",
+  "version": "1.0",
+  "description": "Scans all URLs on a webpage and alerts if phishing is detected.",
+
+  "permissions": ["scripting", "activeTab"],
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    }
+  ]
+}

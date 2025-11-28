@@ -160,3 +160,5 @@ print(f"Character mapping saved to {CHAR2IDX_PATH}")
 # When finished, optionally print a couple of examples
 print("Example encoded URL (first train sample):")
 print(X_train[0][:50])
+
+print(DEVICE)

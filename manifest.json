@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Phisappear",
+  "version": "1.0.0",
+  "description": "Phisappear help user to detect potential phishing link.",
+  "permissions": ["tabs", "activeTab"],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

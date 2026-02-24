@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader, TensorDataset
 # ---------------------------
 # Config
 # ---------------------------
-CSV_PATH = "URL dataset.csv"   # change if your file name differs
+CSV_PATH = "URL dataset.csv"   # csv file
 MAX_LEN = 100                  # sequence length (characters)
 BATCH_SIZE = 64
 EPOCHS = 10
@@ -26,15 +26,79 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ---------------------------
 # 1. Load dataset
 # ---------------------------
-df = pd.read_csv(CSV_PATH)
-df.columns = [c.lower().strip() for c in df.columns]
+# df = pd.read_csv(CSV_PATH)
+# df.columns = [c.lower().strip() for c in df.columns]
 
-if 'url' not in df.columns or 'type' not in df.columns:
-    raise ValueError("CSV must contain 'url' and 'type' columns.")
+# if 'url' not in df.columns or 'type' not in df.columns:
+#     raise ValueError("CSV must contain 'url' and 'type' columns.")
 
-# Map textual labels to binary
-df['type'] = df['type'].astype(str).str.lower().map({'legitimate': 0, 'phishing': 1})
-df = df.dropna(subset=['type'])
+# # Map textual labels to binary
+# df['type'] = df['type'].astype(str).str.lower().map({'legitimate': 0, 'phishing': 1})
+# df = df.dropna(subset=['type'])
+
+CSV_PATH_1 = "URL dataset.csv"
+CSV_PATH_2 = "Phishing URLs.csv"
+
+df1 = pd.read_csv(CSV_PATH_1)
+df2 = pd.read_csv(CSV_PATH_2)
+
+# Normalize column names
+df1.columns = [c.lower().strip() for c in df1.columns]
+df2.columns = [c.lower().strip() for c in df2.columns]
+
+# ---- Ensure df1 has correct columns ----
+if 'url' not in df1.columns:
+    raise ValueError("First CSV must contain a 'url' column.")
+
+if 'type' not in df1.columns:
+    raise ValueError("First CSV must contain a 'type' column.")
+
+# ---- Fix df2 column names if different ----
+# Common alternative names
+rename_map = {}
+
+if 'link' in df2.columns:
+    rename_map['link'] = 'url'
+if 'label' in df2.columns:
+    rename_map['label'] = 'type'
+if 'class' in df2.columns:
+    rename_map['class'] = 'type'
+
+df2 = df2.rename(columns=rename_map)
+
+# Ensure required columns exist
+if 'url' not in df2.columns:
+    raise ValueError("Second CSV must contain a URL column (url or link).")
+
+# If type column missing, assume all are phishing
+if 'type' not in df2.columns:
+    print("Second dataset has no 'type' column → assuming phishing")
+    df2['type'] = 'phishing'
+
+# ---- Convert numeric labels to text ----
+df2['type'] = df2['type'].astype(str).str.lower().replace({
+    '1': 'phishing',
+    '0': 'legitimate',
+    'yes': 'phishing',
+    'no': 'legitimate'
+})
+
+# ---- Merge datasets ----
+df = pd.concat([df1, df2], ignore_index=True)
+
+# Clean labels
+df['type'] = df['type'].astype(str).str.lower().map({
+    'legitimate': 0,
+    'benign': 0,
+    'safe': 0,
+    'phishing': 1,
+    'malicious': 1
+})
+
+df = df.dropna(subset=['url', 'type'])
+
+print("Total samples after merge:", len(df))
+print(df['type'].value_counts())
 
 # ---------------------------
 # 2. Build char2idx (vocabulary)

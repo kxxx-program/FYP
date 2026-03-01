@@ -1,88 +1,100 @@
-//URL Extraction
-chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-  const currentTab = tabs[0];
-  const url = currentTab.url;
-
-  document.getElementById("url").textContent = url;
+//Update score for user everytime bro switch tab
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  const tab = await chrome.tabs.get(activeInfo.tabId);
+  if (tab.url) {
+    const score = await calculateRiskScore(0.2, tab.url);
+    chrome.storage.local.set({ risk_score: score });
+  }
 });
 
-//Go to whitelist page
-document.getElementById("openPage").addEventListener("click", function() {
-     chrome.tabs.create({
-        url: chrome.runtime.getURL("whitelist.html")
-    });
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status === "complete" && tab.active && tab.url) {
+    const score = await calculateRiskScore(0.2, tab.url);
+    chrome.storage.local.set({ risk_score: score });
+  }
 });
-//-----------------------------
 
 
 
-//Threat assessment logic
+//Listen for popup every new popup open
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "GET_RISK_SCORE") {
 
-
-//-----------------------------
-
-
-//Risk Level display
-const statuses = {
-      1: { color: '#22c55e', label: 'SAFE'},
-      2: { color: '#eab308', label: 'LOW-RISK'},
-      3: { color: '#f97316', label: 'MODERATE-RISK'},
-      4: { color: '#ef4444', label: 'HIGH-RISK'},
-};
-
-//determine the range of the score
-    function score_range(risk_score){
-      if(risk_score <= 0.25)return 1;
-      if(risk_score <= 0.46)return 2;
-      if(risk_score <= 0.70)return 3;
-      return 4;
-    }
-
-//TESTING FOR BAR WILL REMOVE LATER
-    const scoreInput  = document.getElementById('scoreInput');
-    const riskTitle   = document.getElementById('risktitle');
-    const assessReason = document.getElementById('assessReason');
-    //remove later
-    const errorMsg    = document.getElementById('errorMsg');
-    const applyBtn    = document.getElementById('applyBtn');
-  
-
-//how much the bar fill base on risk status
-    const segments = [1,2,3,4].map(i => document.getElementById('seg' + i));
-
-
-
-    function applyScore(risk_score) {
-      const zone = score_range(risk_score)
-      const s = statuses[zone];
-
-      // Update CSS variable for reactive coloring
-      document.body.style.setProperty('--current-color', s.color);
-
-
-      // Bar fill to according risk level
-      segments.forEach((seg, i) => {
-        seg.className = 'bar-seg';
-        if (i < zone) seg.classList.add('active-' + zone);
+    //Put AI confidence level here
+    (async () => {
+      const AssessResult = await calculateRiskScore(1.0,message.url);
+      chrome.storage.local.set({ risk_score: AssessResult }, () => {
+        sendResponse({ risk_score: AssessResult });
       });
+    })();
+
+    return true;
+  }
+});
+
+//--------------------------Threat assessment logic-----------------
+//---Heuristic Rules------
+
+const heuristicRules = [
+  {
+    name: "longQuery",
+    weight: 0.2,
+    test: (url) => {
+      const query = new URL(url).search;
+      return query.length >= 40;
     }
-
-    function handleApply() {
-  const raw = scoreInput.value.trim();
-  const val = parseFloat(raw);             // parseFloat, NOT parseInt (decimals!)
-  errorMsg.textContent = '';
-
-  if (raw === '') {
-    errorMsg.textContent = 'Please enter a score.';
-    return;
+  },
+  {
+    name: "suskeywords",
+    weight: 0.3,
+    test: (url) => {
+      const keywords = ["login", "verify", "update", "secure", "add", "delete"];
+      return keywords.some(k => url.toLowerCase().includes(k));
+    }
+  },
+  {
+    name: "fakeBrand",
+    weight: 0.5,
+    test: (url) => {
+      const brands = ["paypa1", "rnicrosoft", "g00gle"];
+      return brands.some(b => url.toLowerCase().includes(b));
+    }
   }
-  if (isNaN(val) || val < 0 || val > 1) {  // range is 0–1
-    errorMsg.textContent = 'Score must be between 0 and 1.';
-    return;
-  }
+];
 
-  applyScore(val);
+async function heuristicFlags(url){
+  let totalScore = 0;
+
+  for (const rule of heuristicRules) {
+    if (rule.test(url)) {
+      totalScore += rule.weight;
+    }
+  }
+  return totalScore;
 }
 
-applyBtn.addEventListener('click', handleApply);
-scoreInput.addEventListener('keydown', e => { if (e.key === 'Enter') handleApply(); });
+
+async function domainReputation(url){
+    return 0.0; //Still testing
+    
+}
+
+async function calculateRiskScore(confidence, url) {
+
+      const domainScore = await domainReputation(url);
+      const heuristicScore = await heuristicFlags(url);
+
+  
+      const riskScore =
+          (confidence * 0.6) +
+          (domainScore * 0.3) +
+          (heuristicScore * 0.1);
+
+      return (riskScore.toFixed(1));
+  
+    
+}
+
+
+
+

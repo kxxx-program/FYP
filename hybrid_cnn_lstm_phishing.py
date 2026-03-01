@@ -7,10 +7,10 @@ import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 
-# Configuration, combine csv1 and 2, compare when algorithm running
+# CONFIG
 CSV1 = "URL dataset.csv"
 CSV2 = "Phishing URLs.csv"
-MAX_LEN = 100
+MAX_LEN = 120
 BATCH_SIZE = 64
 EPOCHS = 30
 LR = 0.001
@@ -18,7 +18,7 @@ MODEL_PATH = "hybrid_cnn_lstm_model.pth"
 CHAR2IDX_PATH = "char2idx.json"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Load datasets
+# LOAD DATA
 df1 = pd.read_csv(CSV1)
 df2 = pd.read_csv(CSV2)
 
@@ -32,7 +32,7 @@ if "type" not in df2.columns:
 
 df = pd.concat([df1, df2], ignore_index=True)
 
-# Clean labels
+# CLEAN LABELS
 df["url"] = df["url"].astype(str).str.lower().str.strip()
 df["type"] = df["type"].astype(str).str.lower().str.strip()
 
@@ -49,13 +49,12 @@ df["label"] = df["type"].map({
 df = df.dropna(subset=["url", "label"])
 df["label"] = df["label"].astype(int)
 
-# remove duplicates
 df = df.drop_duplicates(subset="url")
 
 print("Dataset size:", len(df))
 print(df["label"].value_counts())
 
-# Build vocabulary
+# BUILD VOCAB
 all_chars = sorted(set("".join(df["url"])))
 char2idx = {c: i + 1 for i, c in enumerate(all_chars)}
 vocab_size = len(char2idx) + 1
@@ -63,7 +62,7 @@ vocab_size = len(char2idx) + 1
 with open(CHAR2IDX_PATH, "w") as f:
     json.dump(char2idx, f)
 
-# Encode URLs
+# ENCODE URLS
 def encode(url):
     seq = [char2idx.get(c, 0) for c in url[:MAX_LEN]]
     if len(seq) < MAX_LEN:
@@ -73,7 +72,7 @@ def encode(url):
 X = np.array([encode(u) for u in df["url"]])
 y = np.array(df["label"], dtype=np.float32)
 
-# Train/Test split
+# SPLIT
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, stratify=y, random_state=42
 )
@@ -90,17 +89,22 @@ test_loader = DataLoader(
     batch_size=BATCH_SIZE
 )
 
-# Model
-class HybridCNNLSTM(nn.Module):
+# MODEL (Multi-Kernel CNN + BiLSTM)
+class MultiKernelCNN_LSTM(nn.Module):
     def __init__(self, vocab_size):
         super().__init__()
+
         self.embedding = nn.Embedding(vocab_size, 128, padding_idx=0)
-        self.conv = nn.Conv1d(128, 256, kernel_size=5, padding=2)
-        self.pool = nn.MaxPool1d(2)
+
+        self.conv3 = nn.Conv1d(128, 128, kernel_size=3, padding=1)
+        self.conv5 = nn.Conv1d(128, 128, kernel_size=5, padding=2)
+        self.conv7 = nn.Conv1d(128, 128, kernel_size=7, padding=3)
+
         self.relu = nn.ReLU()
+        self.pool = nn.MaxPool1d(2)
 
         self.lstm = nn.LSTM(
-            256, 128,
+            384, 128,
             batch_first=True,
             bidirectional=True,
             num_layers=2
@@ -110,29 +114,35 @@ class HybridCNNLSTM(nn.Module):
         self.fc = nn.Linear(256, 1)
 
     def forward(self, x):
-        x = self.embedding(x)
-        x = x.permute(0, 2, 1)
-        x = self.pool(self.relu(self.conv(x)))
-        x = x.permute(0, 2, 1)
+        x = self.embedding(x)      # (B, L, 128)
+        x = x.permute(0, 2, 1)     # (B, 128, L)
+
+        x1 = self.relu(self.conv3(x))
+        x2 = self.relu(self.conv5(x))
+        x3 = self.relu(self.conv7(x))
+
+        x = torch.cat([x1, x2, x3], dim=1)  # (B, 384, L)
+
+        x = self.pool(x)
+        x = x.permute(0, 2, 1)     # (B, L/2, 384)
 
         _, (h, _) = self.lstm(x)
         h = torch.cat((h[-2], h[-1]), dim=1)
-        h = self.dropout(h)
 
+        h = self.dropout(h)
         return self.fc(h).squeeze(1)
 
-model = HybridCNNLSTM(vocab_size).to(DEVICE)
+model = MultiKernelCNN_LSTM(vocab_size).to(DEVICE)
 
-# Loss (handle imbalance)
+# LOSS (Handle imbalance)
 phish = (df["label"] == 1).sum()
 legit = (df["label"] == 0).sum()
 
 pos_weight = torch.tensor([legit / phish]).to(DEVICE)
-
 criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 optimizer = optim.Adam(model.parameters(), lr=LR)
 
-# Training
+# TRAINING
 for epoch in range(EPOCHS):
     model.train()
     total_loss = 0
@@ -150,7 +160,7 @@ for epoch in range(EPOCHS):
 
     print(f"Epoch {epoch+1}/{EPOCHS} Loss: {total_loss / len(train_loader.dataset):.4f}")
 
-# Evaluation
+# EVALUATION
 model.eval()
 correct = total = 0
 
@@ -163,8 +173,8 @@ with torch.no_grad():
         correct += (preds == yb).sum().item()
         total += yb.size(0)
 
-print("Test Accuracy:", correct / total * 100)
+print("Test Accuracy:", round(correct / total * 100, 2), "%")
 
-# Save
+# SAVE
 torch.save(model.state_dict(), MODEL_PATH)
-print("Model saved:", MODEL_PATH)
+print("Model saved successfully!")

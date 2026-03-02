@@ -3,7 +3,7 @@
   "name": "Phisappear",
   "version": "1.0.0",
   "description": "Phisappear help user to detect potential phishing link.",
-  "permissions": ["tabs", "activeTab", "storage"],
+  "permissions": ["tabs", "activeTab", "storage", "scripting"],
   "background": {
     "service_worker": "securityLogic.js"
   },

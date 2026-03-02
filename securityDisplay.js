@@ -56,38 +56,32 @@ const statuses = {
     const segments = [1,2,3,4].map(i => document.getElementById('seg' + i));
 
 
+    function handleResponse(){
+
+      const val = chrome.storage.local.get({ risk_score }); 
+
+      applyScore(val);
+    }
+
 
     function applyScore(risk_score) {
       const zone = score_range(risk_score)
-      const s = statuses[zone];
-
-      // Update CSS variable for reactive coloring
-      document.body.style.setProperty('--current-color', s.color);
-
 
       // Bar fill to according risk level
       segments.forEach((seg, i) => {
         seg.className = 'bar-seg';
         if (i < zone) seg.classList.add('active-' + zone);
       });
+
+      //Icon color
+      const icon = document.querySelector('.level-icon');
+
+      // Remove any existing active-* class
+      icon.classList.remove('active-1', 'active-2', 'active-3', 'active-4');
+
+  
+      icon.classList.add(`active-${zone}`);
     }
 
-    function handleApply() {
-        const raw = scoreInput.value.trim();
-        const val = parseFloat(raw);             
-        errorMsg.textContent = '';
+  
 
-  if (raw === '') {
-    errorMsg.textContent = 'Please enter a score.';
-    return;
-  }
-  if (isNaN(val) || val < 0 || val > 1) {  // range is 0–1
-    errorMsg.textContent = 'Score must be between 0 and 1.';
-    return;
-  }
-
-  applyScore(val);
-}
-
-applyBtn.addEventListener('click', handleApply);
-scoreInput.addEventListener('keydown', e => { if (e.key === 'Enter') handleApply(); });

@@ -16,7 +16,7 @@
         </nav>       
     </div>
 
-    <table class="whitelist-content">
+    <table class="whitelist-content" id="listURL">
       <thead>
         <tr>
           <th>Website Name</th>
@@ -24,26 +24,46 @@
           <th>Date Added</th>
         </tr>
       </thead>
-        <tbody class="table-body">
-          <tr>
-            <td>example.com</td>
-            <td>High</td>
-            <td>2026-02-16</td>
-          </tr>
-          <tr>
-            <td>google.com</td>
-            <td>Low</td>
-            <td>2026-02-15</td>
-          </tr>
-      </tbody>
+        <tbody class="table-body"></tbody>
     </table>
 
-    
-
-
+   
+    <div class="footer">
+    <button id="addURL">Add URL</button>
+    <button id="removeURL">Remove URL</button>
+    </div>
 
   </body>
-    <div class="footer">
-    <p>© 2026</p>
+
+  <dialog id="addSiteDialog">
+    <div class="modal">
+      <div class="modal-content">
+        <h2 class="modal-title">Add URL to whitelist</h2>
+        <form id="addForm">
+          <div class="form-group">
+            <label for="name">Name :</label>
+            <input type="text" id="webname" placeholder="Enter name" required>
+          </div>
+
+          <div class="form-group">
+            <label for="url">URL :</label>
+            <input type="url" id="whitelistURL" placeholder="Enter URL" required>
+          </div>
+
+          <div class="warning-text">
+            The added URL will no longer be detected by the system and will be considered as safe<br>
+            Continue?
+          </div>
+
+          <div class="button-group">
+            <button type="submit" class="btn yes">Yes</button>
+            <button type="button" class="btn no">No</button>
+          </div>
+        </form>
+      </div>
     </div>
+ 
+  </dialog>
+
+    <script src="whitelistCRUD.js"></script>
 </html>

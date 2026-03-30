@@ -19,14 +19,12 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": [ 
-      "hybrid_cnn_lstm_model.onnx",
-      "scripts/ort.min.js",
-      "scripts/ort-wasm.wasm",
-      "scripts/ort-wasm-simd.wasm",
-      "scripts/ort-wasm-threaded.wasm",
-      "scripts/ort-wasm-simd-threaded.wasm"
-    ],
+      "resources": [
+        "model/*.onnx",
+        "model/*.json",
+        "libs/*.wasm",
+        "libs/ort.min.js"
+      ],
       "matches": ["<all_urls>"]
     }
   ],

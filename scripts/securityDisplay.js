@@ -16,13 +16,14 @@ function showWarningBanner(level, score) {
   banner.style.position = "fixed";
   banner.style.top = "0";
   banner.style.left = "0";
-  banner.style.width = "100%";
+  banner.style.width = "50%";
   banner.style.padding = "15px";
   banner.style.zIndex = "999999";
   banner.style.fontSize = "16px";
   banner.style.fontWeight = "bold";
   banner.style.textAlign = "center";
   banner.style.color = "white";
+  
 
   if (level === 4) banner.style.backgroundColor = "red";
   else if (level === 3) banner.style.backgroundColor = "orange";
@@ -48,4 +49,10 @@ function showWarningBanner(level, score) {
       document.body.appendChild(banner);
     });
   }
+
+  // Auto-dismiss after 3 seconds with fade
+  setTimeout(() => {
+    banner.style.opacity = "0";
+    setTimeout(() => banner.remove(), 500); // remove after fade completes
+  }, 3000);
 }

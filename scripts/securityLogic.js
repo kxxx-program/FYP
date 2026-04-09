@@ -1,3 +1,22 @@
+//-- initial notification setup
+chrome.runtime.onInstalled.addListener(async () => {
+
+  const data =
+    await chrome.storage.local.get("notificationSettings");
+
+  if (!data.notificationSettings) {
+
+    await chrome.storage.local.set({
+      notificationSettings: DEFAULT_SETTINGS
+    });
+
+    console.log("Default notification settings initialized");
+
+  }
+
+});
+
+
 importScripts(chrome.runtime.getURL("libs/ort.min.js"));
 ort.env.wasm.wasmPaths = chrome.runtime.getURL("libs/");
  
@@ -8,12 +27,10 @@ const MAX_LEN = 120;
 async function loadModel() {
   if (ortSession) return ortSession;
  
-  // Load char2idx vocab
   const vocabUrl = chrome.runtime.getURL("model/char2idx.json");
   const res = await fetch(vocabUrl);
   char2idx = await res.json();
  
-  // Load ONNX model
   const modelUrl = chrome.runtime.getURL("model/hybrid_cnn_lstm_model.onnx");
   ortSession = await ort.InferenceSession.create(modelUrl, {
     executionProviders: ["wasm"],
@@ -27,13 +44,11 @@ async function runAiModel(url) {
   try {
     const session = await loadModel();
  
-    // Encode using char2idx vocab
     const padded = new Array(MAX_LEN).fill(0);
     Array.from(url.toLowerCase()).slice(0, MAX_LEN).forEach((c, i) => {
       padded[i] = char2idx[c] || 0;
     });
  
-    // int64 tensor (Embedding layer requires integer input)
     const inputTensor = new ort.Tensor(
       "int64",
       BigInt64Array.from(padded.map(BigInt)),
@@ -42,7 +57,6 @@ async function runAiModel(url) {
  
     const results = await session.run({ input_ids: inputTensor });
  
-    // Apply sigmoid to convert logit → probability
     const logit = Number(results["output"].data[0]);
     const confidence = 1 / (1 + Math.exp(-logit));
     const label = confidence > 0.5 ? "phishing" : "legitimate";
@@ -52,7 +66,7 @@ async function runAiModel(url) {
  
   } catch (err) {
     console.error("[AI] runAiModel failed:", err);
-    return { confidence: 0.0, label: "unknown" };
+    return { confidence: 0.6, label: "unknown" };
   }
 }
  
@@ -90,15 +104,12 @@ async function assessAndStore(tabId, url, source) {
   if (!url || url.startsWith("chrome://") || url.startsWith("about:")) return;
  
   try {
-    // FIX 1: destructure { confidence, label } from runAiModel
     const { confidence, label } = await runAiModel(url);
     const { score: AssessResult, flags } = await calculateRiskScore(confidence, url);
  
-    await chrome.storage.local.set({
-      risk_score: AssessResult,
-    });
+    await chrome.storage.local.set({ risk_score: AssessResult });
  
-    notificationTrigger(AssessResult, tabId);
+    await notificationTrigger(AssessResult, tabId, url);
  
     console.log(`[RiskEngine] ${source} → score: ${AssessResult}, label: ${label}, confidence: ${confidence}, flags: ${flags}`);
   } catch (err) {
@@ -110,17 +121,15 @@ async function assessAndStore(tabId, url, source) {
 // ---------------- MESSAGE LISTENER ----------------
  
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type !== "GET_RISK_SCORE" || !message.url) return false;
- 
-  (async () => {
-    const { confidence, label } = await runAiModel(message.url);
-    const { score: AssessResult, flags } = await calculateRiskScore(confidence, message.url);
- 
-    chrome.storage.local.set({ risk_score: AssessResult });
-    sendResponse({ risk_score: AssessResult, label: label, flags: flags });
-  })();
- 
-  return true;
+  if (message.type === "GET_RISK_SCORE" && message.url) {
+    (async () => {
+      const { confidence, label } = await runAiModel(message.url);
+      const { score: AssessResult, flags } = await calculateRiskScore(confidence, message.url);
+      chrome.storage.local.set({ risk_score: AssessResult });
+      sendResponse({ risk_score: AssessResult, label, flags });
+    })();
+    return true;
+  }
 });
  
  
@@ -144,18 +153,12 @@ const heuristicRules = [
     }
   },
   {
-     name: "fakeBrand",
+    name: "fakeBrand",
     weight: 0.5,
     test: (url) => {
-      const brands = ["paypa1", "rnicrosoft", "g00gle", "chotgpt"];
-      const normalized = url.toLowerCase()
-        .replace(/0/g, "o")
-        .replace(/1/g, "l")
-        .replace(/3/g, "e")
-        .replace(/@/g, "a");
-      return brands.some(b => normalized.includes(
-        b.replace(/0/g, "o").replace(/1/g, "l")
-      ));
+      const fakePatterns = ["paypa1", "rnicrosoft", "g00gle", "ch0tgpt"];
+      const lowerUrl = url.toLowerCase();
+      return fakePatterns.some(pattern => lowerUrl.includes(pattern));
     }
   }
 ];
@@ -216,51 +219,99 @@ function getRiskLevel(score) {
   return 4;
 }
  
-function notificationTrigger(score, tabId) {
-  const level = getRiskLevel(score);
- 
-  if (level === 4) {
-    chrome.tabs.update(tabId, {
-      url: chrome.runtime.getURL("UI/blocked.html")
-    });
-  }
- 
-  if (level >= 3) {
-    showSystemNotification(level, score);
-  }
- 
-  handleRisk(level, tabId, score);
-  updateBadge(level);
+function getRiskKey(level) {
+  return ["safe", "low", "moderate", "high"][level - 1];
 }
  
  
-// ---------------- CONTENT SCRIPT MESSAGE ----------------
+
  
-async function handleRisk(level, tabId, score) {
+async function getNotificationSettings() {
+  const data = await chrome.storage.local.get("notificationSettings");
+  return data.notificationSettings || DEFAULT_SETTINGS;
+}
+ 
+ 
+// ---------------- NOTIFICATION TRIGGER (settings-aware) ----------------
+ 
+async function notificationTrigger(score, tabId, url) {
+  const level = getRiskLevel(score);
+  const riskKey = getRiskKey(level);
+  const settings = await getNotificationSettings();
+  const levelSettings = settings[riskKey] || {};
+ 
+  const levelLabels = ["Safe", "Low Risk", "Moderate Risk", "High Risk"];
+  const levelLabel = levelLabels[level - 1];
+ 
+  // --- HIGH: Force return page ---
+  if (level === 4 && levelSettings.forceReturn) {
+    chrome.tabs.update(tabId, {
+      url: chrome.runtime.getURL("UI/blocked.html") + `?score=${score}&level=${level}`
+    });
+    return; // Hard block; 
+  }
+ 
+  // --- MODERATE+: 
+  if (level >= 3 && levelSettings.safePage) {
+    try {
+      await chrome.tabs.sendMessage(tabId, {
+        action: "ENABLE_SAFE_PAGE_INTERCEPT",
+        level,
+        score,
+        safePageUrl: chrome.runtime.getURL("UI/safepage.html")
+      });
+    } catch (e) {
+      console.log("[RiskEngine] Could not enable safe page intercept:", e.message);
+    }
+  }
+ 
+  // --- LOW+: Click-to-proceed
+  if (level >= 2 && levelSettings.clickToProceed) {
+    try {
+      await chrome.tabs.sendMessage(tabId, {
+        action:"PRESS_TO_PROCEED",
+        riskKey
+      });
+    } catch (e) {
+      console.log("[RiskEngine] Could not show click-to-proceed:", e.message);
+    }
+  }
+ 
+  // --- ALL LEVELS: In-page banner + system notification ---
+  if (levelSettings.popupBanner) {
+    await chrome.tabs.sendMessage(tabId, {
+      action: "SHOW_WARNING_DETAILS",
+      level,
+      score,
+      showThreatLevel:
+        levelSettings.showThreatLevel || false,
+      riskKey
+    });
+
   try {
     await chrome.tabs.sendMessage(tabId, {
       action: "SHOW_WARNING",
-      level: level,
-      score: score
+      level,
+      score,
+      showThreatLevel:
+        levelSettings.showThreatLevel || false,
+      riskKey
     });
-  } catch (e) {
-    console.log("Content script not ready");
-  }
+
+    }   catch (e) {
+      console.log("[RiskEngine] Content script not ready:", e.message);
+    }
+
+  
+
+
+  updateBadge(level);
 }
- 
+}
  
 // ---------------- NOTIFICATION ----------------
  
-function showSystemNotification(level, score) {
-  const levelText = ["Safe", "Low", "Moderate", "High"][level - 1];
- 
-  chrome.notifications.create({
-    type: "basic",
-    iconUrl: "icon.png",
-    title: "⚠ Phishing Warning",
-    message: `Risk: ${levelText} (${(score * 100).toFixed(0)}%)`
-  });
-}
+
  
  
 // ---------------- BADGE ----------------

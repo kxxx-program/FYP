@@ -54,25 +54,63 @@ function applyScore(score) {
 //Message box
 
 const flagMessages = {
+  // Heuristic flags
   longQuery: "!! URL has an unusually long query string",
   susKeywords: "!!  URL contains suspicious keywords (e.g. login, verify, secure)",
-  fakeBrand: "!! URL may be impersonating a known brand"
+  fakeBrand: "!! URL may be impersonating a known brand",
+
+  // Domain reputation flags
+  suspiciousTLD:       "⚠ Domain uses a suspicious top-level domain",
+  longDomain:          "⚠ Domain name is unusually long",
+  excessiveSubdomains: "⚠ Domain has an excessive number of subdomains",
+  hyphenAbuse:         "⚠ Domain contains an unusual number of hyphens",
+  numberHeavyDomain:   "⚠ Domain contains an unusual number of digits",
+  urlShortener:        "⚠ URL uses a shortener service which may hide the real destination",
 };
 
 function applyFlags(flags) {
   const container = document.getElementById("riskLevelScore");
- 
-  if (flags.length === 0) {
-    container.textContent = "No specific flags triggered.";
-    return;
+  container.innerHTML = "";
+
+  const heuristicKeys = ["longQuery", "susKeywords", "fakeBrand"];
+  const domainKeys    = ["suspiciousTLD", "longDomain", "excessiveSubdomains", "hyphenAbuse", "numberHeavyDomain", "urlShortener"];
+
+  const heuristicFlags = flags.filter(f => heuristicKeys.includes(f));
+  const domainFlags    = flags.filter(f => domainKeys.includes(f));
+
+  // --- Heuristic section ---
+  const heuristicSection = document.createElement("div");
+  heuristicSection.style.marginBottom = "8px";
+
+  if (heuristicFlags.length === 0) {
+    const none = document.createElement("div");
+    none.textContent = "No specific URL flags triggered.";
+    heuristicSection.appendChild(none);
+  } else {
+    heuristicFlags.forEach(flag => {
+      const line = document.createElement("div");
+      line.textContent = flagMessages[flag] || `⚠ ${flag}`;
+      line.style.marginBottom = "4px";
+      heuristicSection.appendChild(line);
+    });
   }
- 
-  container.innerHTML = ""; // clear "Loading"
- 
-  flags.forEach(flag => {
-    const line = document.createElement("div");
-    line.textContent = flagMessages[flag] || `⚠ ${flag}`;
-    line.style.marginBottom = "4px";
-    container.appendChild(line);
-  });
+
+  // --- Domain section ---
+  const domainSection = document.createElement("div");
+
+  if (domainFlags.length === 0) {
+    const none = document.createElement("div");
+    none.textContent = "No specific domain flags triggered.";
+    domainSection.appendChild(none);
+  } else {
+    domainFlags.forEach(flag => {
+      const line = document.createElement("div");
+      line.textContent = flagMessages[flag] || `⚠ ${flag}`;
+      line.style.marginBottom = "4px";
+      domainSection.appendChild(line);
+    });
+  }
+
+  container.appendChild(heuristicSection);
+  container.appendChild(domainSection);
 }

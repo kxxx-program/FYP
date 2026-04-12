@@ -1,76 +1,61 @@
-//-- initial notification setup
-chrome.runtime.onInstalled.addListener(async () => {
-
-  const data =
-    await chrome.storage.local.get("notificationSettings");
-
-  if (!data.notificationSettings) {
-
-    await chrome.storage.local.set({
-      notificationSettings: DEFAULT_SETTINGS
-    });
-
-    console.log("Default notification settings initialized");
-
-  }
-
-});
-
-
-importScripts(chrome.runtime.getURL("libs/ort.min.js"));
-ort.env.wasm.wasmPaths = chrome.runtime.getURL("libs/");
+const OFFSCREEN_URL = "offscreen.html";
  
-let ortSession = null;
-let char2idx = {};
-const MAX_LEN = 120;
+let creatingOffscreen = null; 
  
-async function loadModel() {
-  if (ortSession) return ortSession;
+async function ensureOffscreenDocument() {
+  const offscreenUrl = chrome.runtime.getURL(OFFSCREEN_URL);
  
-  const vocabUrl = chrome.runtime.getURL("model/char2idx.json");
-  const res = await fetch(vocabUrl);
-  char2idx = await res.json();
- 
-  const modelUrl = chrome.runtime.getURL("model/hybrid_cnn_lstm_model.onnx");
-  ortSession = await ort.InferenceSession.create(modelUrl, {
-    executionProviders: ["wasm"],
-    graphOptimizationLevel: "all"
+  const existingContexts = await chrome.runtime.getContexts({
+    contextTypes: ["OFFSCREEN_DOCUMENT"],
+    documentUrls: [offscreenUrl],
   });
  
-  return ortSession;
+  if (existingContexts.length > 0) return; 
+ 
+  
+  if (creatingOffscreen) {
+    await creatingOffscreen;
+    return;
+  }
+ 
+  creatingOffscreen = chrome.offscreen.createDocument({
+    url: OFFSCREEN_URL,
+    reasons: ["WORKERS"], 
+    justification: "Run ONNX Runtime WASM inference for phishing URL detection",
+  });
+
+ 
+  await creatingOffscreen;
+  creatingOffscreen = null;
+ 
+  console.log("[SW] Offscreen document created");
 }
  
 async function runAiModel(url) {
-  try {
-    const session = await loadModel();
+  await ensureOffscreenDocument();
  
-    const padded = new Array(MAX_LEN).fill(0);
-    Array.from(url.toLowerCase()).slice(0, MAX_LEN).forEach((c, i) => {
-      padded[i] = char2idx[c] || 0;
-    });
- 
-    const inputTensor = new ort.Tensor(
-      "int64",
-      BigInt64Array.from(padded.map(BigInt)),
-      [1, MAX_LEN]
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(
+      { type: "RUN_MODEL", url },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          console.error("[SW] Offscreen message error:", chrome.runtime.lastError.message);
+          resolve({ confidence: 0.1, label: "unknown" });
+          return;
+        }
+        if (!response || !response.success) {
+          resolve({ confidence: 0.1, label: "unknown" });
+          return;
+        }
+        resolve({ confidence: response.confidence, label: response.label });
+      }
     );
- 
-    const results = await session.run({ input_ids: inputTensor });
- 
-    const logit = Number(results["output"].data[0]);
-    const confidence = 1 / (1 + Math.exp(-logit));
-    const label = confidence > 0.5 ? "phishing" : "legitimate";
- 
-    console.log(`[AI] label: ${label}, confidence: ${confidence.toFixed(4)}`);
-    return { confidence, label };
- 
-  } catch (err) {
-    console.error("[AI] runAiModel failed:", err);
-    return { confidence: 0.6, label: "unknown" };
-  }
+  });
 }
  
- 
+
+ensureOffscreenDocument().catch(console.error);
+
 // ---------------- TAB LISTENERS ----------------
  
 const lastProcessed = new Map();
@@ -97,6 +82,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   lastProcessed.delete(tabId);
 });
  
+
  
 // ---------------- ASSESS AND STORE ----------------
  
@@ -176,29 +162,144 @@ async function heuristicFlags(url) {
 }
  
 async function domainReputation(url) {
-  return 0.00; // Still testing
-}
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
  
-async function whiteListCheck(url) {
-  const data = await chrome.storage.local.get("urlList");
-  const urlList = data.urlList || [];
+    let score = 0;
+    let checks = 0;
+    const triggered = [];
  
-  return urlList.some((item) => {
-    try {
-      const savedHost = new URL(item.url).hostname.replace(/^www\./, "");
-      const checkHost = new URL(url).hostname.replace(/^www\./, "");
-      return savedHost === checkHost;
-    } catch {
-      return false;
+    const suspiciousTLDs = [".xyz", ".top", ".club", ".site", ".online", ".info", ".click", ".live"];
+    checks++;
+    if (suspiciousTLDs.some(tld => hostname.endsWith(tld))) {
+      score += 1;
+      triggered.push("suspiciousTLD");
     }
-  });
+ 
+    checks++;
+    if (hostname.length > 50) {
+      score += 1;
+      triggered.push("longDomain");
+    }
+ 
+    checks++;
+    if (hostname.split(".").length > 3) {
+      score += 1;
+      triggered.push("excessiveSubdomains");
+    }
+ 
+    checks++;
+    if ((hostname.match(/-/g) || []).length >= 3) {
+      score += 1;
+      triggered.push("hyphenAbuse");
+    }
+ 
+    checks++;
+    if ((hostname.match(/[0-9]/g) || []).length >= 4) {
+      score += 1;
+      triggered.push("numberHeavyDomain");
+    }
+ 
+    const shorteners = ["bit.ly", "tinyurl.com", "t.co", "goo.gl", "is.gd"];
+    checks++;
+    if (shorteners.includes(hostname)) {
+      score += 1;
+      triggered.push("urlShortener");
+    }
+ 
+    return { score: Number((score / checks).toFixed(2)), triggered };
+ 
+  } catch (err) {
+    console.log("[DomainReputation] Failed:", err.message);
+    return { score: 0.0, triggered: [] };
+  }
+}
+
+async function whiteListCheck(url) {
+  try {
+
+    const checkHost =
+      new URL(url)
+        .hostname
+        .replace(/^www\./, "")
+        .toLowerCase();
+
+    // ---------------- DEFAULT TRUSTED DOMAINS ----------------
+
+    const defaultTrustedDomains = [
+      // Search engines
+      "google.com",
+      "bing.com",
+      "yahoo.com",
+      "duckduckgo.com",
+
+      // Google services
+      "mail.google.com",
+      "accounts.google.com",
+      "drive.google.com",
+      "docs.google.com",
+      "meet.google.com",
+      "maps.google.com",
+
+      // Cloud services
+      "github.com",
+      "stackoverflow.com",
+    ];
+
+    // ---------------- DEFAULT WHITELIST CHECK ----------------
+
+    if (
+      defaultTrustedDomains.some(domain =>
+        checkHost === domain ||
+        checkHost.endsWith("." + domain)
+      )
+    ) {
+      return true;
+    }
+
+    // ---------------- USER WHITELIST ----------------
+
+    const data =
+      await chrome.storage.local.get("urlList");
+
+    const urlList =
+      data.urlList || [];
+
+    return urlList.some((item) => {
+
+      try {
+
+        const savedHost =
+          new URL(item.url)
+            .hostname
+            .replace(/^www\./, "")
+            .toLowerCase();
+
+        return (
+          checkHost === savedHost ||
+          checkHost.endsWith("." + savedHost)
+        );
+
+      } catch {
+
+        return false;
+
+      }
+
+    });
+
+  } catch {
+
+    return false;
+
+  }
 }
  
 async function calculateRiskScore(confidence, url) {
   const whitelisted = await whiteListCheck(url);
   if (whitelisted) return { score: 0.00, flags: [], whitelisted: true };
  
-  const domainScore = await domainReputation(url);
+  const { score: domainScore, triggered: domainFlags } = await domainReputation(url);
   const { totalScore: heuristicScore, triggered: flags } = await heuristicFlags(url);
  
   const riskScore =
@@ -256,9 +357,7 @@ async function notificationTrigger(score, tabId, url) {
     try {
       await chrome.tabs.sendMessage(tabId, {
         action: "ENABLE_SAFE_PAGE_INTERCEPT",
-        level,
-        score,
-        safePageUrl: chrome.runtime.getURL("UI/safepage.html")
+       url: chrome.runtime.getURL("UI/blocked.html") + `?score=${score}&level=${level}`
       });
     } catch (e) {
       console.log("[RiskEngine] Could not enable safe page intercept:", e.message);

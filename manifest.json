@@ -3,7 +3,7 @@
   "name": "Phisappear",
   "version": "1.0.0",
   "description": "Phisappear help user to detect potential phishing link.",
-  "permissions": ["tabs", "activeTab", "storage", "scripting", "notifications"],
+  "permissions": ["tabs", "activeTab", "storage", "scripting", "notifications",  "offscreen"],
    "host_permissions": [
     "<all_urls>"
   ],
@@ -17,13 +17,19 @@
       "run_at": "document_idle"
     }
   ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  },
   "web_accessible_resources": [
     {
       "resources": [
         "model/*.onnx",
+        "model/*.onnx.data",
         "model/*.json",
-        "libs/*.wasm",
-        "libs/ort.min.js"
+        "lib/*.wasm",
+        "lib/ort.min.js",
+        "offscreen.html",
+        "offscreen.js"
       ],
       "matches": ["<all_urls>"]
     }

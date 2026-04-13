@@ -1,6 +1,5 @@
 const OFFSCREEN_URL = "offscreen.html";
- 
-let creatingOffscreen = null; 
+let creatingOffscreen = null;
  
 async function ensureOffscreenDocument() {
   const offscreenUrl = chrome.runtime.getURL(OFFSCREEN_URL);
@@ -10,9 +9,8 @@ async function ensureOffscreenDocument() {
     documentUrls: [offscreenUrl],
   });
  
-  if (existingContexts.length > 0) return; 
+  if (existingContexts.length > 0) return;
  
-  
   if (creatingOffscreen) {
     await creatingOffscreen;
     return;
@@ -20,10 +18,9 @@ async function ensureOffscreenDocument() {
  
   creatingOffscreen = chrome.offscreen.createDocument({
     url: OFFSCREEN_URL,
-    reasons: ["WORKERS"], 
+    reasons: ["WORKERS"],
     justification: "Run ONNX Runtime WASM inference for phishing URL detection",
   });
-
  
   await creatingOffscreen;
   creatingOffscreen = null;
@@ -53,9 +50,66 @@ async function runAiModel(url) {
   });
 }
  
-
 ensureOffscreenDocument().catch(console.error);
-
+ 
+const tempAllowedUrls = new Set();
+// --- Notification Default settings --------
+ 
+const DEFAULT_SETTINGS = {
+  safe: {
+    popupBanner: true,
+    showThreatLevel: true
+  },
+  low: {
+    popupBanner: true,
+    showThreatLevel: true,
+    clickToProceed: true
+  },
+  moderate: {
+    popupBanner: true,
+    showThreatLevel: true,
+    clickToProceed: false,
+    safePage: true
+  },
+  high: {
+    popupBanner: false,
+    showThreatLevel: false,
+    clickToProceed: false,
+    safePage: false,
+    forceReturn: true
+  }
+};
+ 
+async function getNotificationSettings() {
+  const data = await chrome.storage.local.get("notificationSettings");
+ 
+  if (!data.notificationSettings) {
+    await chrome.storage.local.set({ notificationSettings: DEFAULT_SETTINGS });
+    return DEFAULT_SETTINGS;
+  }
+ 
+  return data.notificationSettings;
+}
+ 
+ 
+// ---------------- STARTUP ----------------
+ 
+// Assess current active tab immediately on install/reload
+// so badge and notifications fire without needing navigation
+chrome.runtime.onInstalled.addListener(assessActiveTab);
+chrome.runtime.onStartup.addListener(assessActiveTab);
+ 
+async function assessActiveTab() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.url) return;
+    await assessAndStore(tab.id, tab.url, "startup");
+  } catch (err) {
+    console.error("[RiskEngine] Startup assess failed:", err);
+  }
+}
+ 
+ 
 // ---------------- TAB LISTENERS ----------------
  
 const lastProcessed = new Map();
@@ -82,18 +136,17 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   lastProcessed.delete(tabId);
 });
  
-
  
 // ---------------- ASSESS AND STORE ----------------
  
 async function assessAndStore(tabId, url, source) {
-  if (!url || url.startsWith("chrome://") || url.startsWith("about:")) return;
+  if (!url || url.startsWith("chrome://") || url.startsWith("about:") || url.startsWith("chrome-extension://")) return;
  
   try {
     const { confidence, label } = await runAiModel(url);
     const { score: AssessResult, flags } = await calculateRiskScore(confidence, url);
  
-    await chrome.storage.local.set({ risk_score: AssessResult });
+    await chrome.storage.local.set({ risk_score: AssessResult, risk_flags: flags });
  
     await notificationTrigger(AssessResult, tabId, url);
  
@@ -107,11 +160,17 @@ async function assessAndStore(tabId, url, source) {
 // ---------------- MESSAGE LISTENER ----------------
  
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "ALLOW_ONCE" && message.url) {
+    tempAllowedUrls.add(message.url);
+    sendResponse({ success: true });
+    return true;
+  }
+  
   if (message.type === "GET_RISK_SCORE" && message.url) {
     (async () => {
       const { confidence, label } = await runAiModel(message.url);
       const { score: AssessResult, flags } = await calculateRiskScore(confidence, message.url);
-      chrome.storage.local.set({ risk_score: AssessResult });
+      chrome.storage.local.set({ risk_score: AssessResult, risk_flags: flags });
       sendResponse({ risk_score: AssessResult, label, flags });
     })();
     return true;
@@ -123,7 +182,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
  
 const heuristicRules = [
   {
-    name: "longQuery",
+    name: "suspiciousTLD",
     weight: 0.2,
     test: (url) => {
       const query = new URL(url).search;
@@ -142,11 +201,85 @@ const heuristicRules = [
     name: "fakeBrand",
     weight: 0.5,
     test: (url) => {
-      const fakePatterns = ["paypa1", "rnicrosoft", "g00gle", "ch0tgpt"];
+      const fakePatterns = ["paypa1", "rnicrosoft", "g00gle", "ch0tgpt", "wik1ped1A", "twi!!3r"];
       const lowerUrl = url.toLowerCase();
       return fakePatterns.some(pattern => lowerUrl.includes(pattern));
     }
   }
+];
+
+const domainRules = [
+
+  {
+    name: "suspiciousTLD",
+    weight: 0.25,
+    message: "⚠ Domain uses a suspicious top-level domain",
+
+    test: (hostname) => {
+
+      const suspiciousTLDs = [
+        ".xyz",
+        ".top",
+        ".club",
+        ".site",
+        ".online",
+        ".click",
+        ".live"
+      ];
+
+      return suspiciousTLDs.some(
+        tld => hostname.endsWith(tld)
+      );
+    }
+  },
+
+  {
+    name: "hyphenAbuse",
+    weight: 0.25,
+    message: "⚠ Domain contains an unusual number of hyphens",
+
+    test: (hostname) => {
+
+      const hyphenCount =
+        (hostname.match(/-/g) || []).length;
+
+      return hyphenCount >= 3;
+    }
+  },
+
+  {
+    name: "numberHeavyDomain",
+    weight: 0.25,
+    message: "⚠ Domain contains an unusual number of digits",
+
+    test: (hostname) => {
+
+      const digitCount =
+        (hostname.match(/[0-9]/g) || []).length;
+
+      return digitCount >= 4;
+    }
+  },
+
+  {
+    name: "urlShortener",
+    weight: 0.25,
+    message: "⚠ URL uses a shortener service which may hide the real destination",
+
+    test: (hostname) => {
+
+      const shorteners = [
+        "bit.ly",
+        "tinyurl.com",
+        "t.co",
+        "goo.gl",
+        "is.gd"
+      ];
+
+      return shorteners.includes(hostname);
+    }
+  }
+
 ];
  
 async function heuristicFlags(url) {
@@ -162,136 +295,76 @@ async function heuristicFlags(url) {
 }
  
 async function domainReputation(url) {
-  try {
-    const hostname = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
- 
-    let score = 0;
-    let checks = 0;
-    const triggered = [];
- 
-    const suspiciousTLDs = [".xyz", ".top", ".club", ".site", ".online", ".info", ".click", ".live"];
-    checks++;
-    if (suspiciousTLDs.some(tld => hostname.endsWith(tld))) {
-      score += 1;
-      triggered.push("suspiciousTLD");
-    }
- 
-    checks++;
-    if (hostname.length > 50) {
-      score += 1;
-      triggered.push("longDomain");
-    }
- 
-    checks++;
-    if (hostname.split(".").length > 3) {
-      score += 1;
-      triggered.push("excessiveSubdomains");
-    }
- 
-    checks++;
-    if ((hostname.match(/-/g) || []).length >= 3) {
-      score += 1;
-      triggered.push("hyphenAbuse");
-    }
- 
-    checks++;
-    if ((hostname.match(/[0-9]/g) || []).length >= 4) {
-      score += 1;
-      triggered.push("numberHeavyDomain");
-    }
- 
-    const shorteners = ["bit.ly", "tinyurl.com", "t.co", "goo.gl", "is.gd"];
-    checks++;
-    if (shorteners.includes(hostname)) {
-      score += 1;
-      triggered.push("urlShortener");
-    }
- 
-    return { score: Number((score / checks).toFixed(2)), triggered };
- 
-  } catch (err) {
-    console.log("[DomainReputation] Failed:", err.message);
-    return { score: 0.0, triggered: [] };
-  }
-}
+  let totalScore = 0.0;
 
-async function whiteListCheck(url) {
+  const triggered = [];
+
   try {
 
-    const checkHost =
+    const hostname =
       new URL(url)
         .hostname
         .replace(/^www\./, "")
         .toLowerCase();
 
-    // ---------------- DEFAULT TRUSTED DOMAINS ----------------
+    for (const rule of domainRules) {
 
+      if (rule.test(hostname)) {
+
+        totalScore += rule.weight;
+
+        triggered.push(rule.name);
+
+        console.log(
+          `[DomainRule] ${rule.name} triggered`
+        );
+      }
+    }
+  } catch (err) {
+
+    console.log(
+      "[DomainRule] Failed:",
+      err.message
+    );
+  }
+  return {
+    score: Number(totalScore.toFixed(2)),
+    triggered
+  };
+
+}
+ 
+async function whiteListCheck(url) {
+  try {
+    const checkHost = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+ 
     const defaultTrustedDomains = [
-      // Search engines
-      "google.com",
-      "bing.com",
-      "yahoo.com",
-      "duckduckgo.com",
-
-      // Google services
-      "mail.google.com",
-      "accounts.google.com",
-      "drive.google.com",
-      "docs.google.com",
-      "meet.google.com",
-      "maps.google.com",
-
-      // Cloud services
-      "github.com",
-      "stackoverflow.com",
+      "google.com", "bing.com", "yahoo.com", "duckduckgo.com",
+      "mail.google.com", "accounts.google.com", "drive.google.com",
+      "docs.google.com", "meet.google.com", "maps.google.com",
+      "github.com", "stackoverflow.com",
     ];
-
-    // ---------------- DEFAULT WHITELIST CHECK ----------------
-
-    if (
-      defaultTrustedDomains.some(domain =>
-        checkHost === domain ||
-        checkHost.endsWith("." + domain)
-      )
-    ) {
+ 
+    if (defaultTrustedDomains.some(domain =>
+      checkHost === domain || checkHost.endsWith("." + domain)
+    )) {
       return true;
     }
-
-    // ---------------- USER WHITELIST ----------------
-
-    const data =
-      await chrome.storage.local.get("urlList");
-
-    const urlList =
-      data.urlList || [];
-
+ 
+    const data = await chrome.storage.local.get("urlList");
+    const urlList = data.urlList || [];
+ 
     return urlList.some((item) => {
-
       try {
-
-        const savedHost =
-          new URL(item.url)
-            .hostname
-            .replace(/^www\./, "")
-            .toLowerCase();
-
-        return (
-          checkHost === savedHost ||
-          checkHost.endsWith("." + savedHost)
-        );
-
+        const savedHost = new URL(item.url).hostname.replace(/^www\./, "").toLowerCase();
+        return checkHost === savedHost || checkHost.endsWith("." + savedHost);
       } catch {
-
         return false;
-
       }
-
     });
-
+ 
   } catch {
-
     return false;
-
   }
 }
  
@@ -300,7 +373,9 @@ async function calculateRiskScore(confidence, url) {
   if (whitelisted) return { score: 0.00, flags: [], whitelisted: true };
  
   const { score: domainScore, triggered: domainFlags } = await domainReputation(url);
-  const { totalScore: heuristicScore, triggered: flags } = await heuristicFlags(url);
+  const { totalScore: heuristicScore, triggered: heuristicFlagsList } = await heuristicFlags(url);
+ 
+  const flags = [...domainFlags, ...heuristicFlagsList];
  
   const riskScore =
     (confidence * 0.6) +
@@ -325,50 +400,70 @@ function getRiskKey(level) {
 }
  
  
-
- 
-async function getNotificationSettings() {
-  const data = await chrome.storage.local.get("notificationSettings");
-  return data.notificationSettings || DEFAULT_SETTINGS;
-}
- 
- 
-// ---------------- NOTIFICATION TRIGGER (settings-aware) ----------------
+// ---------------- NOTIFICATION TRIGGER ----------------
  
 async function notificationTrigger(score, tabId, url) {
+
+  if (tempAllowedUrls.has(url)) {
+    updateBadge(getRiskLevel(score));
+    return; 
+  }
+  
   const level = getRiskLevel(score);
   const riskKey = getRiskKey(level);
   const settings = await getNotificationSettings();
   const levelSettings = settings[riskKey] || {};
  
-  const levelLabels = ["Safe", "Low Risk", "Moderate Risk", "High Risk"];
-  const levelLabel = levelLabels[level - 1];
- 
-  // --- HIGH: Force return page ---
+  // --- HIGH: Force return (send user back with noti pop) ---
   if (level === 4 && levelSettings.forceReturn) {
-    chrome.tabs.update(tabId, {
-      url: chrome.runtime.getURL("UI/blocked.html") + `?score=${score}&level=${level}`
+    await chrome.tabs.goBack(tabId).catch(async () => {
+      await chrome.tabs.update(tabId, { url: "chrome://newtab/" });
     });
-    return; // Hard block; 
+ 
+    // Wait briefly for the previous page to load before injecting noti
+    setTimeout(async () => {
+      try {
+        await chrome.tabs.sendMessage(tabId, {
+          action: "SHOW_HIGH_RISK_NOTIFICATION",
+          score,
+          blockedUrl: url
+        });
+      } catch (e) {
+        console.log("[RiskEngine] Could not send high risk notification:", e.message);
+      }
+    }, 800);
+ 
+   
+    return;
   }
  
-  // --- MODERATE+: 
-  if (level >= 3 && levelSettings.safePage) {
-    try {
-      await chrome.tabs.sendMessage(tabId, {
-        action: "ENABLE_SAFE_PAGE_INTERCEPT",
-       url: chrome.runtime.getURL("UI/blocked.html") + `?score=${score}&level=${level}`
-      });
-    } catch (e) {
-      console.log("[RiskEngine] Could not enable safe page intercept:", e.message);
-    }
+  // --- MODERATE+: Safe page intercept ---
+  if (level === 3 && levelSettings.safePage) {
+    const safePageUrl =
+    chrome.runtime.getURL("UI/safepage.html");
+
+    if (url.startsWith(safePageUrl))
+    return;
+
+    chrome.tabs.update(tabId, {
+
+    url:
+      safePageUrl +
+      `?score=${score}`
+      + `&level=${level}`
+      + `&target=${encodeURIComponent(url)}`
+      + `&canProceed=true`
+
+    });
+    
+    return;
   }
  
-  // --- LOW+: Click-to-proceed
+  // --- LOW+: Click-to-proceed ---
   if (level >= 2 && levelSettings.clickToProceed) {
     try {
       await chrome.tabs.sendMessage(tabId, {
-        action:"PRESS_TO_PROCEED",
+        action: "PRESS_TO_PROCEED",
         riskKey
       });
     } catch (e) {
@@ -376,41 +471,37 @@ async function notificationTrigger(score, tabId, url) {
     }
   }
  
-  // --- ALL LEVELS: In-page banner + system notification ---
-  if (levelSettings.popupBanner) {
-    await chrome.tabs.sendMessage(tabId, {
-      action: "SHOW_WARNING_DETAILS",
-      level,
-      score,
-      showThreatLevel:
-        levelSettings.showThreatLevel || false,
-      riskKey
-    });
+  // --- ALL LEVELS: In-page banner ---
+  if (levelSettings.showThreatLevel) {
+    try {
+      await chrome.tabs.sendMessage(tabId, {
+        action: "SHOW_WARNING_DETAILS",
+        level, score,
+        showThreatLevel: levelSettings.showThreatLevel || false,
+        riskKey
+      });
+    } catch (e) {
+      console.log("[RiskEngine] Could not send SHOW_WARNING_DETAILS:", e.message);
+    }
+  }
 
-  try {
-    await chrome.tabs.sendMessage(tabId, {
-      action: "SHOW_WARNING",
-      level,
-      score,
-      showThreatLevel:
-        levelSettings.showThreatLevel || false,
-      riskKey
-    });
-
-    }   catch (e) {
+  if (levelSettings.popupBanner) { 
+    try {
+      await chrome.tabs.sendMessage(tabId, {
+        action: "SHOW_WARNING",
+        level, score,
+        showThreatLevel: levelSettings.showThreatLevel || false,
+        riskKey
+      });
+    } catch (e) {
       console.log("[RiskEngine] Content script not ready:", e.message);
     }
-
+  }
   
-
-
+ 
+  // Badge always updates 
   updateBadge(level);
 }
-}
- 
-// ---------------- NOTIFICATION ----------------
- 
-
  
  
 // ---------------- BADGE ----------------

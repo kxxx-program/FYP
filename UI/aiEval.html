@@ -10,13 +10,31 @@
         <nav class="navbar">
           <a href ="../UI/whitelist.html">User Whitelist</a>
           <a href ="../UI/warningPref.html">Warning Preference</a>
-          <a href ="../UI/history.html">History</a>
           <a href ="../UI/aiEval.html">AI Evaluation</a>
           <a href ="../UI/about.html">About</a>
         </nav>       
     </div>
 
-    
+    <body class="card">
+      <div style="padding: 20px;">
+          <h2>AI Model Tester</h2>
+          <div class="form-group">
+              <label for="testUrl">URL to Test:</label>
+              <input type="text" id="testUrl" placeholder="https://example.com" style="width: 100%; margin-bottom: 10px;">
+              <button id="runTest" class="btn yes" style="width: 100%;">Analyze URL</button>
+          </div>
+
+          <div id="testResult" style="margin-top: 20px; padding: 15px; background: #3a3f5a; border-radius: 8px; display: none;">
+              <p><strong>Risk Score:</strong> <span id="resScore">-</span></p>
+              <p><strong>Risk Level:</strong> <span id="resLevel">-</span></p>
+          </div>
+        
+          <div id="loadingStatus" style="margin-top: 10px; font-style: italic; color: #c3c3dc;"></div>
+      </div>
+
+      <script src="../lib/ort.min.js"></script>
+      <script src="../scripts/aiEvalTester.js"></script>
+    </body>
     </body>
     <div class="footer">
     <p>© 2026</p>

@@ -48,6 +48,7 @@ function applyScore(score) {
   
   const levelNames = ["Safe", "Low Risk", "Moderate Risk", "High Risk"];
   document.getElementById("risk-title").textContent = levelNames[zone - 1];
+  document.getElementById("risk-score").textContent = score * 100;
 }
 
 
@@ -60,12 +61,10 @@ const flagMessages = {
   fakeBrand: "!! URL may be impersonating a known brand",
 
   // Domain reputation flags
-  suspiciousTLD:       "⚠ Domain uses a suspicious top-level domain",
-  longDomain:          "⚠ Domain name is unusually long",
-  excessiveSubdomains: "⚠ Domain has an excessive number of subdomains",
-  hyphenAbuse:         "⚠ Domain contains an unusual number of hyphens",
-  numberHeavyDomain:   "⚠ Domain contains an unusual number of digits",
-  urlShortener:        "⚠ URL uses a shortener service which may hide the real destination",
+  suspiciousTLD:       "Domain uses a suspicious top-level domain",
+  hyphenAbuse:         "Domain contains an unusual number of hyphens",
+  numberHeavyDomain:   "Domain contains an unusual number of digits",
+  urlShortener:        "URL uses a shortener service which may hide the real destination",
 };
 
 function applyFlags(flags) {

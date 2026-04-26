@@ -93,9 +93,6 @@ async function getNotificationSettings() {
  
  
 // ---------------- STARTUP ----------------
- 
-// Assess current active tab immediately on install/reload
-// so badge and notifications fire without needing navigation
 chrome.runtime.onInstalled.addListener(assessActiveTab);
 chrome.runtime.onStartup.addListener(assessActiveTab);
  
@@ -420,7 +417,7 @@ async function notificationTrigger(score, tabId, url) {
       await chrome.tabs.update(tabId, { url: "chrome://newtab/" });
     });
  
-    // Wait briefly for the previous page to load before injecting noti
+    // Wait briefly before injecting noti
     setTimeout(async () => {
       try {
         await chrome.tabs.sendMessage(tabId, {

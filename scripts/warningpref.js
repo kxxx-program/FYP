@@ -41,8 +41,7 @@ function initWarningPrefPage() {
 async function loadSettings() {
   const data = await chrome.storage.local.get("notificationSettings");
  
-  // If nothing in storage yet (fresh install), save defaults NOW
-  // so securityLogic.js always finds a real value and never gets undefined
+  
   if (!data.notificationSettings) {
     await chrome.storage.local.set({ notificationSettings: DEFAULT_SETTINGS });
   }
